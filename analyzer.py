@@ -48,17 +48,19 @@ Contesto testuale dal sito/email:
 {context_text[:2500]}
 
 CRITERI DI RILEVANZA (rilevante = true):
-1. Qualsiasi menzione esplicita di "Pergolettese" (squalifiche, diffide, inibizioni, ammende/multe, omologazioni/decisioni del Giudice Sportivo, variazioni orario/data/campo gare, calendari/gironi con Pergolettese, convocazioni rappresentative, ecc.).
-2. Avvisi, circolari o informazioni GENERALI molto importanti valide per tutte le società delle nostre categorie (Serie C/Primavera 3, SGS nazionale, CRLombardia o Delegazione Cremona), ad esempio:
+1. Qualsiasi menzione esplicita di "Pergolettese" (squalifiche, diffide, inibizioni, ammende/multe, omologazioni/decisioni del Giudice Sportivo, variazioni orario/data/campo gare, convocazioni rappresentative, ecc.).
+2. Avvisi, circolari o informazioni GENERALI davvero importanti valide per tutte le società delle nostre categorie (Serie C/Primavera 3, SGS nazionale, CRLombardia o Delegazione Cremona), ad esempio:
    - scadenze per presentazione documenti, iscrizioni, tesseramenti, svincoli
-   - nuovi portali, aggiornamenti operativi o cambi di regolamento importanti
+   - nuovi portali, aggiornamenti operativi o cambi di regolamento sostanziali
    - riunioni, assemblee o incontri informativi per le società
    - rinvii o sospensioni generali dell'attività (es. maltempo, disposizioni federali)
 
-CRITERI DI ESCLUSIONE (rilevante = false):
-- Risultati, classifiche, squalifiche, multe o spostamenti gare che riguardano SOLO altre società (dove non compare Pergolettese).
-- Calendari/comunicati di categorie a cui non partecipiamo (es. Eccellenza, Promozione, Prima/Seconda/Terza Categoria, Calcio a 5, Femminile), salvo avvisi generali amministrativi validi per tutte le società.
-- Semplice modulistica vuota (es. moduli referto standard) senza nuovi obblighi o scadenze.
+CRITERI DI ESCLUSIONE RIGIDI (rilevante = false):
+- Comunicati dedicati al Calcio Femminile (es. sigle C.U. con finale F, Under 17/15 Femminile) o Calcio a 5 / Futsal.
+- Risultati, classifiche, squalifiche, multe o spostamenti/variazioni gare che riguardano SOLO altre società (dove non compare Pergolettese).
+- Semplici "Programmi gare" settimanali o "Sorteggi di Coppa" di categorie a cui non partecipiamo (o che non contengono novità/variazioni straordinarie per Pergolettese).
+- Note procedurali standard e ripetitive stampate in testa o in calce a comunicati di variazioni gara di altre società/categorie (es. promemoria standard su come chiedere cambi campo o caricare verbali su Portale Servizi): NON segnalarle come "Avviso Generale".
+- Modulistica vuota (es. moduli referto standard) senza nuovi obblighi o scadenze.
 
 ISTRUZIONI:
 - Sii preciso e non inventare mai dati. Riporta date, orari, nomi e importi esatti.
@@ -86,7 +88,6 @@ def analyze_document(
     try:
         contents: list = []
         if pdf_bytes:
-            # Sotto i 15 MB invio diretto in memoria; sopra uso Files API
             if len(pdf_bytes) < 15 * 1024 * 1024:
                 contents.append(
                     types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
@@ -116,7 +117,6 @@ def analyze_document(
                             temperature=0.1,
                         ),
                     )
-                    # Piccola pausa cortese per non saturare RPM del piano free
                     time.sleep(3)
                     if getattr(response, "parsed", None) is not None:
                         return response.parsed
@@ -130,7 +130,7 @@ def analyze_document(
                         if attempt == 0:
                             time.sleep(10)
                             continue
-                        break  # passa al modello successivo (es. flash-lite)
+                        break
                     raise
 
         raise RuntimeError(f"Tutti i modelli Gemini hanno esaurito la quota: {last_err}")
