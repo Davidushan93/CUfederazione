@@ -58,12 +58,21 @@ class SourceDocument:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
+def _is_excluded_title(text: str) -> bool:
+    t = text.lower()
+    if any(k in t for k in ("femminile", "calcio a 5", "futsal", "beach soccer", "paralimpic")):
+        return True
+    # Esclude sigle FIGC femminili tipo "C.U. 021F", "c.u.021F", "C.U. 21/F"
+    if re.search(r"\bc\.?\s*u\.?\s*n?°?\s*\d+/?f\b(?!\.)", t):
+        return True
+    return False
+
+
 def parse_italian_date(text: str) -> datetime | None:
     if not text:
         return None
     clean = " ".join(text.lower().split())
 
-    # Formato "16 novembre 2026"
     m = re.search(r"\b(\d{1,2})\s+([a-zà]+)\s+(20\d{2})\b", clean)
     if m:
         day = int(m.group(1))
@@ -75,7 +84,6 @@ def parse_italian_date(text: str) -> datetime | None:
             except ValueError:
                 pass
 
-    # Formato "16/11/2026" o "16-11-2026" o "16.11.2026"
     m = re.search(r"\b(\d{1,2})[/.\-](\d{1,2})[/.\-](20\d{2})\b", clean)
     if m:
         day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -142,6 +150,9 @@ def fetch_figc(source_cfg: dict[str, str]) -> list[SourceDocument]:
     if contents:
         for item in contents:
             title = (item.get("title") or "").strip()
+            if _is_excluded_title(title):
+                continue
+
             page_url = item.get("url") or url
             body_html = item.get("body") or ""
             body_text = BeautifulSoup(body_html, "html.parser").get_text(" ", strip=True)
@@ -166,6 +177,8 @@ def fetch_figc(source_cfg: dict[str, str]) -> list[SourceDocument]:
                     r_url = r["url"]
                     r_title = (r.get("title") or "").strip()
                     full_title = f"{title} - {r_title}" if r_title and r_title not in title else title
+                    if _is_excluded_title(full_title):
+                        continue
                     docs.append(
                         SourceDocument(
                             item_id=r_url,
@@ -190,17 +203,19 @@ def fetch_figc(source_cfg: dict[str, str]) -> list[SourceDocument]:
                 )
         return docs
 
-    # Fallback generico su link PDF nella pagina
     seen_urls = set()
     for a in soup.find_all("a", href=True):
         href = urljoin(url, a["href"])
+        link_title = a.get_text(" ", strip=True) or "Comunicato FIGC"
+        if _is_excluded_title(link_title):
+            continue
         if urlparse(href).path.lower().endswith(".pdf") and href not in seen_urls:
             seen_urls.add(href)
             docs.append(
                 SourceDocument(
                     item_id=href,
                     source_name=name,
-                    title=a.get_text(" ", strip=True) or "Comunicato FIGC",
+                    title=link_title,
                     link_url=href,
                     pdf_url=href,
                 )
@@ -212,7 +227,6 @@ def fetch_figc(source_cfg: dict[str, str]) -> list[SourceDocument]:
 
 def _extract_crl_form_payload(form, source_url: str) -> list[tuple[str, str]]:
     payload: list[tuple[str, str]] = []
-    present_keys: set[str] = set()
 
     for inp in form.find_all("input"):
         name = inp.get("name")
@@ -224,10 +238,8 @@ def _extract_crl_form_payload(form, source_url: str) -> list[tuple[str, str]]:
         if itype in ("checkbox", "radio"):
             if inp.has_attr("checked"):
                 payload.append((name, val))
-                present_keys.add(name)
         else:
             payload.append((name, val))
-            present_keys.add(name)
 
     for sel in form.find_all("select"):
         name = sel.get("name")
@@ -236,10 +248,7 @@ def _extract_crl_form_payload(form, source_url: str) -> list[tuple[str, str]]:
         selected = sel.find("option", selected=True)
         val = selected.get("value", "") if selected else ""
         payload.append((name, val))
-        present_keys.add(name)
 
-    # Assicura che i filtri della query string (es. content_category_value_id, delegazioni[])
-    # siano sempre presenti nel POST anche se il form non li pre-compila lato server
     qs = parse_qs(urlparse(source_url).query)
     for key, values in qs.items():
         if key in ("data-il", "data-dal", "data-al", "q", "page"):
@@ -247,7 +256,6 @@ def _extract_crl_form_payload(form, source_url: str) -> list[tuple[str, str]]:
         existing_vals = {v for k, v in payload if k == key and v != ""}
         for v in values:
             if v not in existing_vals:
-                # Rimuovi eventuale placeholder vuoto per quella chiave scalare
                 if not key.endswith("[]"):
                     payload = [(k, old_v) for (k, old_v) in payload if k != key]
                 payload.append((key, v))
@@ -262,7 +270,6 @@ def _extract_detail_content(
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # Rimuovi navigazione/footer per lasciare solo il contenuto utile
     main_soup = BeautifulSoup(str(soup), "html.parser")
     for tag in main_soup(["nav", "header", "footer", "script", "style"]):
         tag.decompose()
@@ -320,7 +327,6 @@ def fetch_crlombardia(
         print(f"[{name}] Form #form-filter non trovato, uso HTML diretto.")
         list_html = resp.text
 
-    # Preferisci la vista tabellare (#lista) perché ogni riga <tr> contiene titolo + data + allegati
     entries: list[tuple[str, str, datetime | None, list[str]]] = []
     seen_detail_urls: set[str] = set()
 
@@ -352,7 +358,6 @@ def fetch_crlombardia(
             elif direct_pdfs and not detail_url:
                 entries.append((url, row_title or row_text[:120], row_dt, direct_pdfs))
 
-    # Se la vista lista è vuota, analizza #griglia
     if not entries and grid_html:
         grid_soup = BeautifulSoup(grid_html, "html.parser")
         for a in grid_soup.find_all("a", href=True):
@@ -368,6 +373,9 @@ def fetch_crlombardia(
             entries.append((href, a.get_text(" ", strip=True) or parent_text[:120], parse_italian_date(parent_text), []))
 
     for detail_url, title, row_dt, direct_pdfs in entries[:max_entries]:
+        if _is_excluded_title(title):
+            continue
+
         pdf_urls = list(direct_pdfs)
         context_text = f"Titolo: {title}"
         pub_dt = row_dt
@@ -387,11 +395,14 @@ def fetch_crlombardia(
         if pdf_urls:
             for p_url in pdf_urls:
                 filename = urlparse(p_url).path.split("/")[-1]
+                full_title = f"{title} ({filename})" if filename else title
+                if _is_excluded_title(full_title):
+                    continue
                 docs.append(
                     SourceDocument(
                         item_id=p_url,
                         source_name=name,
-                        title=f"{title} ({filename})" if filename else title,
+                        title=full_title,
                         link_url=p_url,
                         published_at=pub_dt,
                         context_text=context_text,
@@ -400,7 +411,6 @@ def fetch_crlombardia(
                     )
                 )
         else:
-            # News o avviso solo testuale (es. emergenze / rinvii)
             docs.append(
                 SourceDocument(
                     item_id=detail_url,
@@ -494,8 +504,6 @@ def fetch_aruba_pr3_emails(
                 if filename and filename.lower().endswith(".pdf"):
                     fn_low = filename.lower()
                     subj_low = subject.lower()
-                    # Regola PR3: prendi PDF che contengono "pr3" nel nome file,
-                    # oppure PDF senza "pr4" quando l'oggetto riguarda solo PR3.
                     is_pr3_pdf = ("pr3" in fn_low) or (
                         "pr3" in subj_low and "pr4" not in fn_low and "pr4" not in subj_low
                     )
